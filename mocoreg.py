@@ -5,10 +5,17 @@ import math
 import itk
 from itk import TubeTK as tube
 
+import csv
+
 class mocoreg():
     
     def __init__(self):
         self.feature_size = 3.0
+        
+        # self.registration_metric = "MATTES_MI_METRIC"
+        self.registration_metric = "MEAN_SQUARED_ERROR_METRIC"
+        
+        self.keyframe_portion = 1.0
         
         self.frames_per_second = 10
         self.max_keyframe_interval = 45
@@ -18,7 +25,7 @@ class mocoreg():
         self.keyframes = []
         self.keyframe_transforms = []
         
-        self.image_reg = []
+        self.data_array_reg = []
         
     def read_4d_bmode_matlab_file(self, filename, 
                                   nlateral=92, nframes=200, ndepth=153, nelevation=102):
@@ -52,7 +59,7 @@ class mocoreg():
                             sigma=(self.frames_per_second/self.keyframe_search_stepsize)/2)
         diff_blur = itk.GetArrayFromImage(diff_img_blur)
         
-        diff_avg = np.average(diff_blur)
+        diff_avg = np.average(diff_blur) * self.keyframe_portion
         diff_thresh = np.where(diff_blur<=diff_avg, 1, 0)
         win_limit = np.argmin(diff_thresh, axis=1) * self.keyframe_search_stepsize
         win_limit = np.where(win_limit==0, self.max_keyframe_interval-1, win_limit)
@@ -96,14 +103,14 @@ class mocoreg():
         diff_meansq = 0
         diff_count = len(keyframes)-1
         for i in range(diff_count):
-            diff = math.sqrt(np.sum(np.square(self.smooth_frame(self.data_array, keyframes[i])[0] -
-                                              self.smooth_frame(self.data_array, keyframes[i+1])[0])))
+            diff = math.sqrt(np.sum(np.square(self.smooth_frame(data_array, keyframes[i])[0] -
+                                              self.smooth_frame(data_array, keyframes[i+1])[0])))
             diffs.append(diff)
             diff_meansq += diff
 
         # Include the diff between the first and last frames
-        diff = math.sqrt(np.sum(np.square(self.smooth_frame(self.data_array, keyframes[-1])[0] -
-                                          self.smooth_frame(self.data_array, keyframes[0])[0])))
+        diff = math.sqrt(np.sum(np.square(self.smooth_frame(data_array, keyframes[-1])[0] -
+                                          self.smooth_frame(data_array, keyframes[0])[0])))
         diffs.append(diff)
         diff_meansq += diff
         
@@ -136,10 +143,9 @@ class mocoreg():
             Reg.SetMovingImage(img_moving_blur)
             Reg.SetReportProgress(True)
             Reg.SetRegistration("PIPELINE_AFFINE")
-            Reg.SetMetric("MATTES_MI_METRIC")
-            #Reg.SetMetric("MEAN_SQUARED_ERROR_METRIC")
+            Reg.SetMetric(self.registration_metric)
 
-            Reg.SetExpectedOffsetMagnitude(100)
+            Reg.SetExpectedOffsetMagnitude(10)
             Reg.SetExpectedRotationMagnitude(0.1)
             Reg.SetRigidSamplingRatio(0.2)
             Reg.SetRigidMaxIterations(4000)
@@ -148,7 +154,6 @@ class mocoreg():
             Reg.SetExpectedSkewMagnitude(0.001)
             Reg.SetAffineSamplingRatio(0.2)
             Reg.SetAffineMaxIterations(2000)
-            #Reg.SetUseEvolutionaryOptimization(False)
 
             Reg.Update()
             
@@ -170,7 +175,6 @@ class mocoreg():
                 return
             keyframes = self.keyframes
         
-        img_fixed_blur = self.smooth_frame(self.data_array, keyframes[0])[1]
         transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
         num_params = transform.GetNumberOfParameters()
         p = transform.GetParameters()
@@ -197,12 +201,32 @@ class mocoreg():
             params = end_params
             
     def apply_interpolations(self):
-        Reg = tube.RegisterImages[itk.Image[itk.F,3]].New()
-        self.image_reg = [ itk.GetImagFromArray(self.data_array[0]) ]
-        for i in range(len(self.data_array[0])-1):
-            img = itk.GetImageFromArray(self.data_array[i])
-            trns = self.transforms[i]
-            img_reg = Reg.ResampleImage("LINEAR",
-                                        movingImage=img,
-                                        matrixTransform=trns)
-            self.image_reg.append(img_reg)
+        self.data_array_reg = np.zeros(self.data_array.shape)
+        self.data_array_reg[0] = self.data_array[0].astype(np.float32)
+        match_image = itk.GetImageFromArray(self.data_array[0].astype(np.float32))
+        for i in range(len(self.data_array)-1):
+            img = itk.GetImageFromArray(self.data_array[i+1].astype(np.float32))
+            trns = itk.AffineTransform[itk.D, 3].New()
+            trns.SetMatrix(self.transforms[i].GetMatrix())
+            trns.SetOffset(self.transforms[i].GetOffset())
+            Res = tube.ResampleImage[itk.Image[itk.F,3]].New()
+            Res.SetInput(img)
+            Res.SetMatchImage(match_image)
+            Res.SetTransform(self.transforms[i])
+            Res.Update()
+            self.data_array_reg[i+1] = itk.GetArrayFromImage(Res.GetOutput())
+            
+    def save_transforms(self, filename):
+        transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
+        num_params = transform.GetNumberOfParameters()
+        if num_params != 12:
+            print("ERROR: Expecting 12 parameters per transform")
+            return
+        with open(filename, 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["VersorX", "VersorY", "VersorZ", "OffsetX", "OffsetY", "OffsetZ",
+                             "ScaleX", "ScaleY", "ScaleZ", "SkewXY", "SkewXZ", "SkewYZ"])
+            for trns in self.transforms:
+                p = trns.GetParameters()
+                params = [ p[x] for x in range(num_params) ]
+                writer.writerow(params)
