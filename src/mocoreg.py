@@ -9,15 +9,14 @@ import csv
 
 class mocoreg():
     
-    def __init__(self):
-        self.debug = False
+    def __init__(self, register_to_frame_0=False, debug=False):
+        self.debug = debug
         
         self.feature_size = 2.0
         
+        self.register_to_frame_0 = register_to_frame_0
         self.registration_metric = "MATTES_MI_METRIC"
         #self.registration_metric = "MEAN_SQUARED_ERROR_METRIC"
-        
-        self.keyframe_portion = 1.0
         
         self.frames_per_second = 10
         self.max_keyframe_interval = 45
@@ -30,16 +29,33 @@ class mocoreg():
         self.data_array_reg = []
         
     def read_4d_bmode_matlab_file(self, filename, 
-                                  nlateral=92, nframes=200, ndepth=153, nelevation=102):
+                                  nlateral=92,
+                                  nframes=200,
+                                  ndepth=153,
+                                  nelevation=102,
+                                  bits=32):
         with open(filename, mode='rb') as file:
             file_content = file.read()
-        pixel_type = np.dtype(np.float64)
+        pixel_type = None
+        if bits==32:
+            pixel_type = np.dtype(np.float32)
+        elif bits==64:
+            pixel_type = np.dtype(np.float64)
+        elif bits==16:
+            pixel_type = np.dtype(np.float16)
+        else:
+            print("ERROR: Only 16, 32, and 64 bit floats supported")
+            self.data_array = []
+            return
+
         pixel_type.newbyteorder('<')
         data_1d = np.frombuffer(file_content, dtype=pixel_type)
-        data_raw = np.reshape(data_1d, [nlateral, nframes, ndepth, nelevation], order='C')
+        data_raw = np.reshape(data_1d,
+                              [nlateral, nframes, ndepth, nelevation],
+                              order='C')
         self.data_array = np.transpose(data_raw, (1,3,0,2))
         
-    def compute_keyframes(self, data_array=[]):
+    def compute_keyframes(self, data_array=[], tolerance = 1.0):
         if len(data_array) == 0:
             data_array = self.data_array
             if len(data_array) == 0:
@@ -56,12 +72,12 @@ class mocoreg():
                                          data_array[win_max,:,:,:]))
                 diff[frame_num, win_num] = tmp_diff
                     
-        diff_img = itk.GetImageFromArray(diff)
+        diff_img = itk.GetImageFromArray(diff.astype(np.float32))
         diff_img_blur = itk.SmoothingRecursiveGaussianImageFilter(diff_img,
                             sigma=(self.frames_per_second/self.keyframe_search_stepsize)/2)
         diff_blur = itk.GetArrayFromImage(diff_img_blur)
         
-        diff_avg = np.average(diff_blur) * self.keyframe_portion
+        diff_avg = np.average(diff_blur) * tolerance
         diff_thresh = np.where(diff_blur<=diff_avg, 1, 0)
         win_limit = np.argmin(diff_thresh, axis=1) * self.keyframe_search_stepsize
         win_limit = np.where(win_limit==0, self.max_keyframe_interval-1, win_limit)
@@ -161,7 +177,8 @@ class mocoreg():
 
             Reg.Update()
             
-            img_fixed_blur = img_moving_blur
+            if self.register_to_frame_0 == False:
+                img_fixed_blur = img_moving_blur
             
             self.keyframe_transforms.append(Reg.GetCurrentMatrixTransform())
             
@@ -199,6 +216,7 @@ class mocoreg():
                 new_transform.SetCenter( self.keyframe_transforms[i].GetCenter() )
                 new_transform.SetParameters( p )
                 self.transforms.append(new_transform)
+
             params = end_params
             
     def apply_interpolations(self):
