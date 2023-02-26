@@ -37,7 +37,7 @@ def prepare_argparser():
 
 def main(args):
     try:
-        app = mocoreg(register_to_frame_0=args.zero, debug=args.Debug)
+        app = mocoreg(register_to_frame_zero=args.zero, debug=args.Debug)
         
         app.read_4d_bmode_matlab_file(args.input_filename,
                                       nlateral=args.laterals,
