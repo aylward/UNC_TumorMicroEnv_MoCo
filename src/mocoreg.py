@@ -140,22 +140,22 @@ class mocoreg:
                     print("ERROR: keyframes not defined")
                     return
                 keyframes = self.keyframes
+        ref_frame =  data_array[keyframes[0]]
         diffs = []
         diff_rmse = 0
-        diff_count = len(keyframes) - 1
-        for i in range(diff_count):
-            diff = np.sum( np.square( self.smooth_frame(data_array, keyframes[i])[0] -
-                                      self.smooth_frame(data_array, keyframes[i+1])[0] ) )
+        diff_count = len(keyframes)
+        for i in range(1,diff_count):
+            frame =  data_array[keyframes[i]]
+            diff = np.average( np.square( ref_frame - frame ) )
             diffs.append(math.sqrt(diff))
             diff_rmse += diff
+            if self.register_to_frame_zero != False:
+                # Do the opposite of registration: 
+                #   * compare prior frame, if all registered to zero
+                #   * compare to zero frame, if all registered to prior
+                ref_frame = frame
 
-        # Include the diff between the first and last frames
-        diff = np.sum( np.square( self.smooth_frame(data_array, keyframes[-1])[0] -
-                                  self.smooth_frame(data_array, keyframes[0])[0] ) )
-        diffs.append(math.sqrt(diff))
-        diff_rmse += diff
-
-        diff_rmse /= diff_count+1
+        diff_rmse /= diff_count-1
         diff_rmse = math.sqrt(diff_rmse)
 
         return diff_rmse, diffs
@@ -191,9 +191,11 @@ class mocoreg:
         Reg.SetAffineTargetError(0.0000001)
 
         for i in range(len(keyframes) - 1):
-            print(f"Registering set {i+1} of {len(keyframes)-1}")
+            print(f"Registering set {i+1} of {len(keyframes)-1}: Frame = {keyframes[i+1]}")
 
             img_moving_blur = self.smooth_frame(self.data_array, keyframes[i + 1])[1]
+            
+            #itk.imwrite(img_moving_blur, str(keyframes[i+1])+".mha")
 
             Reg.SetFixedImage(img_fixed_blur)
             Reg.SetMovingImage(img_moving_blur)
@@ -210,7 +212,7 @@ class mocoreg:
                 Reg.SetEnableInitialRegistration(True)
                 Reg.SetAffineMaxIterations(250)
             Reg.Update()
-
+            
             if self.register_to_frame_zero == False:
                 img_fixed_blur = img_moving_blur
 
@@ -247,7 +249,7 @@ class mocoreg:
                 for x in range(num_params):
                     p[x] = params[x] + portion * (end_params[x] - params[x])
                 new_transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
-                new_transform.SetCenter(self.keyframe_transforms[i].GetCenter())
+                new_transform.SetFixedParameters(self.keyframe_transforms[i].GetFixedParameters())
                 new_transform.SetParameters(p)
                 self.transforms.append(new_transform)
 
@@ -257,9 +259,11 @@ class mocoreg:
         self.data_array_reg = np.zeros(self.data_array.shape)
         self.data_array_reg[0] = self.data_array[0].astype(np.float32)
         match_image = itk.GetImageFromArray(self.data_array[0].astype(np.float32))
+        #kfc = 0
         for i in range(len(self.data_array) - 1):
             img = itk.GetImageFromArray(self.data_array[i + 1].astype(np.float32))
             trns = itk.AffineTransform[itk.D, 3].New()
+            trns.SetCenter(self.transforms[i].GetCenter())
             trns.SetMatrix(self.transforms[i].GetMatrix())
             trns.SetOffset(self.transforms[i].GetOffset())
             Res = tube.ResampleImage[itk.Image[itk.F, 3]].New()
@@ -268,6 +272,11 @@ class mocoreg:
             Res.SetTransform(trns)
             Res.Update()
             self.data_array_reg[i + 1] = itk.GetArrayFromImage(Res.GetOutput())
+            
+            #if i == self.keyframes[kfc]:
+                #itk.imwrite(Res.GetOutput(), str(i)+"_reg.mha")
+                #kfc = kfc + 1
+
 
     def save_transforms(self, filename):
         transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
