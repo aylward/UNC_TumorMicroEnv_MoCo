@@ -14,6 +14,7 @@ def mocoreg_func(input_data,
     transform_list = []
 
     app = mocoreg(register_to_frame_zero=reg_to_zero, debug=debug)
+    app.feature_size=scale
     
     app.import_4d_bmode_matlab_data(input_data)
 
