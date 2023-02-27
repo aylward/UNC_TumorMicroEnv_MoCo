@@ -8,6 +8,8 @@ from mocoreg import mocoreg
 def mocoreg_func(input_data,
                  scale=3.0,
                  tolerance=1.0,
+                 frames_per_second=200,
+                 seconds_per_change=0.333,
                  reg_to_zero=True,
                  debug=False ):
 
@@ -15,6 +17,8 @@ def mocoreg_func(input_data,
 
     app = mocoreg(register_to_frame_zero=reg_to_zero, debug=debug)
     app.feature_size=scale
+    app.frames_per_second=frames_per_second
+    app.seconds_per_change=seconds_per_change
     
     app.import_4d_bmode_matlab_data(input_data)
 
