@@ -344,13 +344,13 @@ class mocoreg:
 
     def get_transforms(self):
         transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
-        transform_list = []
-        for trns in self.transforms:
+        transform_list = np.zeros([len(self.transforms), 12])
+        for i,trns in enumerate(self.transforms):
             m = trns.GetMatrix()
             o = trns.GetOffset()
             params = [m(x,y) for x in range(3) for y in range(3)]
             params.append(o[0])
             params.append(o[1])
             params.append(o[2])
-            transform_list.append(params)
+            transform_list[i] = params
         return transform_list
