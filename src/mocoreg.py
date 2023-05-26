@@ -195,7 +195,7 @@ class mocoreg:
 
             img_moving_blur = self.smooth_frame(self.data_array, keyframes[i + 1])[1]
             
-            #itk.imwrite(img_moving_blur, str(keyframes[i+1])+".mha")
+            itk.imwrite(img_moving_blur, str(keyframes[i+1])+".mha")
 
             Reg.SetFixedImage(img_fixed_blur)
             Reg.SetMovingImage(img_moving_blur)

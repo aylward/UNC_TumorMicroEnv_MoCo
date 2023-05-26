@@ -63,10 +63,10 @@ def main(args):
             print("Before registration MSE =", meansq)
             print("After registration MSE =", meansq_reg)
         
-        app.save_transforms(args.transforms_filename)
+        app.save_matrix_transforms(args.transforms_filename)
         
         if args.results_filename != None:
-            app.apply_interpolations()
+            app.apply_transforms()
             itk.imwrite(itk.GetImageFromArray(app.data_array_reg.astype(np.float32)),
                         args.results_filename, compression=True)
             
