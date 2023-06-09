@@ -154,14 +154,12 @@ class mocoreg:
         diff_count = len(keyframes)
         for i in range(1, diff_count):
             frame = data_array[keyframes[i]]
-            diff = np.average(np.square(ref_frame - frame))
+            diff_frame = np.where(frame > 0, ref_frame-frame, 0)
+            diff = np.average(np.square(diff_frame))
             diffs.append(math.sqrt(diff))
             diff_rmse += diff
-            if self.register_to_frame_zero != False:
-                # Do the opposite of registration:
-                #   * compare prior frame, if all registered to zero
-                #   * compare to zero frame, if all registered to prior
-                ref_frame = frame
+            # Always compare to prior frame
+            #ref_frame = frame
 
         diff_rmse /= diff_count - 1
         diff_rmse = math.sqrt(diff_rmse)
@@ -179,6 +177,7 @@ class mocoreg:
             keyframes = self.keyframes
 
         img_fixed_blur = self.smooth_frame(self.data_array, keyframes[0])[1]
+        img_fixed_blur_0 = img_fixed_blur
 
         self.keyframe_transforms = []
         self.keyframe_data_reg = [img_fixed_blur]
@@ -198,35 +197,56 @@ class mocoreg:
         Reg.SetAffineSamplingRatio(0.2)
         Reg.SetAffineTargetError(0.0000001)
 
+        if self.debug:
+            itk.imwrite(img_fixed_blur,
+                        str(keyframes[0]) + "_fxd.mha")
+
         for i in range(len(keyframes) - 1):
             print(
                 f"Registering set {i+1} of {len(keyframes)-1}: Frame = {keyframes[i+1]}"
             )
 
-            img_moving_blur = self.smooth_frame(self.data_array, keyframes[i + 1])[1]
+            img_moving_blur = self.smooth_frame(self.data_array,
+                                                keyframes[i + 1])[1]
 
-            itk.imwrite(img_moving_blur, str(keyframes[i + 1]) + ".mha")
+            if self.debug:
+                itk.imwrite(img_moving_blur,
+                            str(keyframes[i + 1]) + "_org.mha")
 
             Reg.SetFixedImage(img_fixed_blur)
             Reg.SetMovingImage(img_moving_blur)
 
-            if i == 0:
-                Reg.SetRegistration("PIPELINE_AFFINE")
-                Reg.SetInitialMethodEnum("INIT_WITH_IMAGE_CENTERS")
-                Reg.SetAffineMaxIterations(2000)
-            else:
-                Reg.SetRegistration("AFFINE")
+            Reg.SetRegistration("PIPELINE_AFFINE")
+
+            if i > 0 and self.register_to_frame_zero:
                 Reg.SetLoadedMatrixTransform(self.keyframe_transforms[-1])
                 Reg.SetEnableLoadedRegistration(False)
                 Reg.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
                 Reg.SetEnableInitialRegistration(True)
-                Reg.SetAffineMaxIterations(250)
+
+            Reg.SetRigidMaxIterations(250)
+            Reg.SetAffineMaxIterations(250)
+
             Reg.Update()
 
-            if self.register_to_frame_zero == False:
+            if not self.register_to_frame_zero:
+                if i>0:
+                    trns = Reg.GetCurrentMatrixTransform()
+                    trns.Compose(self.keyframe_transforms[-1], True)
+                    Reg.SetFixedImage(img_fixed_blur_0)
+                    Reg.SetLoadedMatrixTransform(trns)
+                    Reg.SetEnableLoadedRegistration(False)
+                    Reg.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
+                    Reg.SetEnableInitialRegistration(True)
+                    Reg.Update()
                 img_fixed_blur = img_moving_blur
 
             self.keyframe_transforms.append(Reg.GetCurrentMatrixTransform())
+
+            if self.debug:
+                itk.imwrite(Reg.GetFinalMovingImage(),
+                            str(keyframes[i + 1]) + "_reg.mha")
+
         print("Done!")
 
     def interpolate_keyframe_transforms(self, keyframes=[]):
@@ -275,6 +295,7 @@ class mocoreg:
         for i in range(len(self.data_array) - 1):
             img = itk.GetImageFromArray(self.data_array[i + 1].astype(np.float32))
             trns = itk.AffineTransform[itk.D, 3].New()
+            trns.SetIdentity()
             trns.SetCenter(self.transforms[i].GetCenter())
             trns.SetMatrix(self.transforms[i].GetMatrix())
             trns.SetOffset(self.transforms[i].GetOffset())
@@ -282,6 +303,7 @@ class mocoreg:
             Res.SetInput(img)
             Res.SetMatchImage(match_image)
             Res.SetTransform(trns)
+            Res.SetLoadTransform(True)
             Res.Update()
             self.data_array_reg[i + 1] = itk.GetArrayFromImage(Res.GetOutput())
 

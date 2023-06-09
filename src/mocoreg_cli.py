@@ -90,7 +90,12 @@ def main(args):
 
         app.interpolate_keyframe_transforms()
 
+        app.save_matrix_transforms(args.transforms_filename)
+
+        transforms_applied = False
         if args.Debug:
+            app.apply_transforms()
+            transforms_applied = True
             meansq, diff = app.compute_inter_keyframe_diffs()
             meansq_reg, diff_reg = app.compute_inter_keyframe_diffs(
                 data_array=app.data_array_reg
@@ -98,10 +103,10 @@ def main(args):
             print("Before registration MSE =", meansq)
             print("After registration MSE =", meansq_reg)
 
-        app.save_matrix_transforms(args.transforms_filename)
-
         if args.results_filename != None:
-            app.apply_transforms()
+            if not transforms_applied:
+                app.apply_transforms()
+                transforms_applied = True
             itk.imwrite(
                 itk.GetImageFromArray(app.data_array_reg.astype(np.float32)),
                 args.results_filename,
