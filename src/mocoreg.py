@@ -35,7 +35,7 @@ class mocoreg:
         self.data_array_reg = []
 
     def read_4d_bmode_matlab_file(
-        self, filename, nlateral=92, nframes=200, ndepth=153, nelevation=102, bits=32
+        self, filename, nlateral=92, nframes=200, ndepth=153, nelevation=102, bits=32, permute=False
     ):
         with open(filename, mode="rb") as file:
             file_content = file.read()
@@ -51,12 +51,19 @@ class mocoreg:
             self.data_array = []
             return
 
-        pixel_type.newbyteorder("<")
-        data_1d = np.frombuffer(file_content, dtype=pixel_type)
-        data_raw = np.reshape(
-            data_1d, [nlateral, nframes, ndepth, nelevation], order="C"
-        )
-        self.data_array = np.transpose(data_raw, (1, 3, 0, 2))
+        if permute:
+            pixel_type.newbyteorder("<")
+            data_1d = np.frombuffer(file_content, dtype=pixel_type)
+            data_raw = np.reshape(
+                data_1d, [nlateral, nframes, ndepth, nelevation], order="C"
+            )
+            self.data_array = np.transpose(data_raw, (1, 3, 0, 2))
+        else:
+            data_1d = np.frombuffer(file_content)
+            data_raw = np.reshape(
+                data_1d, [nframes, nelevation, nlateral, ndepth], order="C"
+            )
+            self.data_array = data_raw
 
     def import_4d_bmode_matlab_data(self, data):
         # data_raw = np.reshape(data_1d,
@@ -182,20 +189,6 @@ class mocoreg:
         self.keyframe_transforms = []
         self.keyframe_data_reg = [img_fixed_blur]
 
-        Reg = tube.RegisterImages[itk.Image[itk.F, 3]].New()
-
-        Reg.SetReportProgress(self.debug)
-        Reg.SetMetric(self.registration_metric)
-
-        Reg.SetExpectedOffsetMagnitude(2)
-        Reg.SetExpectedRotationMagnitude(0.01)
-        Reg.SetRigidSamplingRatio(0.2)
-        Reg.SetRigidMaxIterations(2000)
-
-        Reg.SetExpectedScaleMagnitude(0.01)
-        Reg.SetExpectedSkewMagnitude(0.001)
-        Reg.SetAffineSamplingRatio(0.2)
-        Reg.SetAffineTargetError(0.0000001)
 
         if self.debug:
             itk.imwrite(img_fixed_blur,
@@ -213,17 +206,35 @@ class mocoreg:
                 itk.imwrite(img_moving_blur,
                             str(keyframes[i + 1]) + "_org.mha")
 
+            Reg = tube.RegisterImages[itk.Image[itk.F, 3]].New()
+
+            Reg.SetReportProgress(self.debug)
+            Reg.SetMetric(self.registration_metric)
+
+            Reg.SetExpectedOffsetMagnitude(2)
+            Reg.SetExpectedRotationMagnitude(0.01)
+            Reg.SetRigidSamplingRatio(0.2)
+            Reg.SetRigidMaxIterations(2000)
+
+            Reg.SetExpectedScaleMagnitude(0.01)
+            Reg.SetExpectedSkewMagnitude(0.001)
+            Reg.SetAffineSamplingRatio(0.2)
+            Reg.SetAffineTargetError(0.0000001)
+
             Reg.SetFixedImage(img_fixed_blur)
             Reg.SetMovingImage(img_moving_blur)
 
-            Reg.SetRegistration("PIPELINE_AFFINE")
-
             if i > 0 and self.register_to_frame_zero:
+                Reg.SetRegistration("PIPELINE_AFFINE")
                 Reg.SetLoadedMatrixTransform(self.keyframe_transforms[-1])
                 Reg.SetEnableLoadedRegistration(False)
                 Reg.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
-                Reg.SetEnableInitialRegistration(True)
-
+            else:
+                Reg.SetRegistration("AFFINE")
+                Reg.SetInitialMethodEnum("INIT_WITH_NONE")
+                
+            Reg.SetEnableInitialRegistration(True)
+                
             Reg.SetRigidMaxIterations(250)
             Reg.SetAffineMaxIterations(250)
 
@@ -234,6 +245,7 @@ class mocoreg:
                     trns = Reg.GetCurrentMatrixTransform()
                     trns.Compose(self.keyframe_transforms[-1], True)
                     Reg.SetFixedImage(img_fixed_blur_0)
+                    Reg.SetMovingImage(img_moving_blur)
                     Reg.SetLoadedMatrixTransform(trns)
                     Reg.SetEnableLoadedRegistration(False)
                     Reg.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
