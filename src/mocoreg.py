@@ -13,7 +13,7 @@ class mocoreg:
         self.debug = debug
 
         # Pixel units
-        self.feature_size = 3.0
+        self.feature_size = 0.75
 
         self.register_to_frame_zero = register_to_frame_zero
         # self.registration_metric = "MATTES_MI_METRIC"
@@ -26,7 +26,10 @@ class mocoreg:
         self.max_keyframe_interval = int(
             self.frames_per_second * self.seconds_per_change / 2
         )
+        print("max_keyframe_interval", self.max_keyframe_interval)
+        
         self.keyframe_search_stepsize = max(5, int(self.max_keyframe_interval * 0.05))
+        print("keyframe_search_stepsize", self.keyframe_search_stepsize)
 
         self.data_array = []
         self.keyframes = []
@@ -182,6 +185,8 @@ class mocoreg:
                 print("ERROR: keyframes not defined.")
                 return
             keyframes = self.keyframes
+        else:
+            self.keyframes = keyframes
 
         img_fixed_blur = self.smooth_frame(self.data_array, keyframes[0])[1]
         img_fixed_blur_0 = img_fixed_blur
@@ -191,8 +196,10 @@ class mocoreg:
 
 
         if self.debug:
-            itk.imwrite(img_fixed_blur,
+            itk.imwrite(itk.GetImageFromArray(self.data_array[keyframes[0]]),
                         str(keyframes[0]) + "_fxd.mha")
+            itk.imwrite(img_fixed_blur,
+                        str(keyframes[0]) + "_fxd_blur.mha")
 
         for i in range(len(keyframes) - 1):
             print(
@@ -204,7 +211,7 @@ class mocoreg:
 
             if self.debug:
                 itk.imwrite(img_moving_blur,
-                            str(keyframes[i + 1]) + "_org.mha")
+                            str(keyframes[i + 1]) + "_org_blur.mha")
 
             Reg = tube.RegisterImages[itk.Image[itk.F, 3]].New()
 
@@ -216,21 +223,22 @@ class mocoreg:
             Reg.SetRigidSamplingRatio(0.2)
             Reg.SetRigidMaxIterations(2000)
 
-            Reg.SetExpectedScaleMagnitude(0.01)
-            Reg.SetExpectedSkewMagnitude(0.001)
+            Reg.SetExpectedScaleMagnitude(0.02)
+            Reg.SetExpectedSkewMagnitude(0.01)
             Reg.SetAffineSamplingRatio(0.2)
+            Reg.SetAffineMaxIterations(500)
             Reg.SetAffineTargetError(0.0000001)
 
             Reg.SetFixedImage(img_fixed_blur)
             Reg.SetMovingImage(img_moving_blur)
 
+            Reg.SetRegistration("PIPELINE_AFFINE")
+            
             if i > 0 and self.register_to_frame_zero:
-                Reg.SetRegistration("PIPELINE_AFFINE")
                 Reg.SetLoadedMatrixTransform(self.keyframe_transforms[-1])
                 Reg.SetEnableLoadedRegistration(False)
                 Reg.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
             else:
-                Reg.SetRegistration("AFFINE")
                 Reg.SetInitialMethodEnum("INIT_WITH_NONE")
                 
             Reg.SetEnableInitialRegistration(True)
@@ -257,35 +265,44 @@ class mocoreg:
 
             if self.debug:
                 itk.imwrite(Reg.GetFinalMovingImage(),
-                            str(keyframes[i + 1]) + "_reg.mha")
+                            str(keyframes[i + 1]) + "_reg_blur.mha")
 
         print("Done!")
 
-    def interpolate_keyframe_transforms(self, keyframes=[]):
-        if len(keyframes) == 0:
-            keyframes = self.keyframes
-        if len(keyframes) == 0:
-            self.compute_keyframes()
-            if len(self.keyframes) == 0:
-                print("ERROR: keyframes not defined.")
-                return
-            keyframes = self.keyframes
-
+    def smooth_transform_parameters(self, i, window=0):
+        window_min = max(0, i-window)
+        window_max = min(len(self.keyframes)-1, i+window+1)
+        
         transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
         num_params = transform.GetNumberOfParameters()
-        p = transform.GetParameters()
-        params = [p(x) for x in range(num_params)]
-        self.transforms = []
-        for i in range(len(keyframes) - 1):
-            start_frame = keyframes[i]
-            end_frame = keyframes[i + 1]
-            step_frame = 1.0 / (end_frame - start_frame)
+        
+        params = np.zeros(num_params)
+        params_weight = 0
+        denom = 2 * ((window+1)/2)**2
+        for w in range(window_min,window_max):
             transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
-            transform.SetCenter(self.keyframe_transforms[i].GetCenter())
-            transform.SetMatrix(self.keyframe_transforms[i].GetMatrix())
-            transform.SetOffset(self.keyframe_transforms[i].GetOffset())
+            transform.SetCenter(self.keyframe_transforms[w].GetCenter())
+            transform.SetMatrix(self.keyframe_transforms[w].GetMatrix())
+            transform.SetOffset(self.keyframe_transforms[w].GetOffset())
             p = transform.GetParameters()
-            end_params = [p[x] for x in range(num_params)]
+            weight = np.exp(-(w-i)**2/denom)
+            params += [p[x]*weight for x in range(num_params)]
+            params_weight += weight
+        params /= params_weight
+        
+        return params
+        
+    def interpolate_keyframe_transforms(self, window=0):  
+        transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
+        num_params = transform.GetNumberOfParameters()
+        params = self.smooth_transform_parameters(0, window)
+        self.transforms = []
+        p = transform.GetParameters()
+        for i in range(len(self.keyframes) - 1):
+            start_frame = self.keyframes[i]
+            end_frame = self.keyframes[i + 1]
+            step_frame = 1.0 / (end_frame - start_frame)
+            end_params = self.smooth_transform_parameters(i+1, window)
             for interp_frame in range(start_frame + 1, end_frame + 1):
                 portion = (interp_frame - start_frame) / (end_frame - start_frame)
                 for x in range(num_params):
@@ -296,14 +313,13 @@ class mocoreg:
                 )
                 new_transform.SetParameters(p)
                 self.transforms.append(new_transform)
-
             params = end_params
 
     def apply_transforms(self):
         self.data_array_reg = np.zeros(self.data_array.shape)
         self.data_array_reg[0] = self.data_array[0].astype(np.float32)
         match_image = itk.GetImageFromArray(self.data_array[0].astype(np.float32))
-        # kfc = 0
+        kfc = 1
         for i in range(len(self.data_array) - 1):
             img = itk.GetImageFromArray(self.data_array[i + 1].astype(np.float32))
             trns = itk.AffineTransform[itk.D, 3].New()
@@ -319,9 +335,9 @@ class mocoreg:
             Res.Update()
             self.data_array_reg[i + 1] = itk.GetArrayFromImage(Res.GetOutput())
 
-            # if i == self.keyframes[kfc]:
-            # itk.imwrite(Res.GetOutput(), str(i)+"_reg.mha")
-            # kfc = kfc + 1
+            if self.debug and kfc<len(self.keyframes) and i+1 == self.keyframes[kfc]:
+                itk.imwrite(Res.GetOutput(), str(i+1)+"_reg_resample.mha")
+                kfc = kfc + 1
 
     def save_transforms(self, filename):
         transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
