@@ -248,6 +248,25 @@ class mocoreg:
 
             Reg.Update()
 
+            if np.isnan(Reg.GetCurrentMatrixTransform().GetParameters()[0]):
+                print("ERROR: Registration failed!!")
+                print("   Attempting re-registration")
+                Reg.SetInitialMethodEnum("INIT_WITH_NONE")
+                Reg.SetEnableInitialRegistration(True)
+                Reg.SetRigidMaxIterations(250)
+                Reg.SetAffineMaxIterations(250)
+                Reg.Update()
+
+            if np.isnan(Reg.GetCurrentMatrixTransform().GetParameters()[0]):
+                print("ERROR: Registration failed twice!!")
+                print("    Reverting to identity transform")
+                Reg.SetEnableInitialRegistration(True)
+                Reg.SetRigidMaxIterations(0)
+                Reg.SetAffineMaxIterations(0)
+                Reg.Update()
+                Reg.SetRigidMaxIterations(250)
+                Reg.SetAffineMaxIterations(250)
+
             if not self.register_to_frame_zero:
                 if i>0:
                     trns = Reg.GetCurrentMatrixTransform()
@@ -259,6 +278,24 @@ class mocoreg:
                     Reg.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
                     Reg.SetEnableInitialRegistration(True)
                     Reg.Update()
+                    if np.isnan(Reg.GetCurrentMatrixTransform().GetParameters()[0]):
+                        print("ERROR: Registration failed!!")
+                        print("   Attempting re-registration")
+                        Reg.SetInitialMethodEnum("INIT_WITH_NONE")
+                        Reg.SetEnableInitialRegistration(True)
+                        Reg.SetRigidMaxIterations(250)
+                        Reg.SetAffineMaxIterations(250)
+                        Reg.Update()
+        
+                    if np.isnan(Reg.GetCurrentMatrixTransform().GetParameters()[0]):
+                        print("ERROR: Registration failed twice!!")
+                        print("    Reverting to identity transform")
+                        Reg.SetEnableInitialRegistration(True)
+                        Reg.SetRigidMaxIterations(0)
+                        Reg.SetAffineMaxIterations(0)
+                        Reg.Update()
+                        Reg.SetRigidMaxIterations(250)
+                        Reg.SetAffineMaxIterations(250)
                 img_fixed_blur = img_moving_blur
 
             self.keyframe_transforms.append(Reg.GetCurrentMatrixTransform())
@@ -270,8 +307,8 @@ class mocoreg:
         print("Done!")
 
     def smooth_transform_parameters(self, i, window=0):
-        window_min = max(0, i-window)
-        window_max = min(len(self.keyframes)-1, i+window+1)
+        window_min = max(-1, i-window)
+        window_max = min(len(self.keyframe_transforms), i+window+1)
         
         transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
         num_params = transform.GetNumberOfParameters()
@@ -281,9 +318,12 @@ class mocoreg:
         denom = 2 * ((window+1)/2)**2
         for w in range(window_min,window_max):
             transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
-            transform.SetCenter(self.keyframe_transforms[w].GetCenter())
-            transform.SetMatrix(self.keyframe_transforms[w].GetMatrix())
-            transform.SetOffset(self.keyframe_transforms[w].GetOffset())
+            if w == -1:
+                transform.SetIdentity()
+            else:
+                transform.SetCenter(self.keyframe_transforms[w].GetCenter())
+                transform.SetMatrix(self.keyframe_transforms[w].GetMatrix())
+                transform.SetOffset(self.keyframe_transforms[w].GetOffset())
             p = transform.GetParameters()
             weight = np.exp(-(w-i)**2/denom)
             params += [p[x]*weight for x in range(num_params)]
@@ -295,10 +335,11 @@ class mocoreg:
     def interpolate_keyframe_transforms(self, window=0):  
         transform = itk.ComposeScaleSkewVersor3DTransform[itk.D].New()
         num_params = transform.GetNumberOfParameters()
-        params = self.smooth_transform_parameters(0, window)
+        transform.SetIdentity()
+        params = transform.GetParameters()
         self.transforms = []
         p = transform.GetParameters()
-        for i in range(len(self.keyframes) - 1):
+        for i in range(len(self.keyframe_transforms)):
             start_frame = self.keyframes[i]
             end_frame = self.keyframes[i + 1]
             step_frame = 1.0 / (end_frame - start_frame)
