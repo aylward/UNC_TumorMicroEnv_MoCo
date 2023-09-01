@@ -369,7 +369,6 @@ class mocoreg:
                     transform.SetOffset(self.keyframe_transforms[w].GetOffset())
                 p = transform.GetParameters()
                 weight = np.exp(-(w-i)**2/denom)
-                print(i, weight)
                 params += [p[x]*weight for x in range(num_params)]
                 params_weight += weight
             params /= params_weight
