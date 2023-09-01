@@ -322,7 +322,7 @@ class mocoreg:
                 RegZero.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
                 RegZero.SetEnableInitialRegistration(True)
                 RegZero.Update()
-                if np.isnan(Reg.ZeroGetCurrentMatrixTransform().GetParameters()[0]):
+                if np.isnan(RegZero.GetCurrentMatrixTransform().GetParameters()[0]):
                     print("ERROR: Registration failed!!")
                     print("   Attempting re-registration")
                     RegZero.SetInitialMethodEnum("INIT_WITH_NONE")
