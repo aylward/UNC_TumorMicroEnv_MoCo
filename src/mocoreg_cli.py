@@ -43,9 +43,9 @@ def prepare_argparser():
     parser.add_argument(
         "-s",
         "--scale",
-        default=3.0,
+        default=0.75,
         type=float,
-        help="Scale applied to data (default=3.0)",
+        help="Scale applied to data (default=0.75)",
     )
     parser.add_argument(
         "-t",
@@ -57,18 +57,28 @@ def prepare_argparser():
         "(default=1.0)",
     )
     parser.add_argument(
-        "-z", "--zero", action="store_true", help="Register all to the zero-th frame"
+        "-S",
+        "--smooth",
+        action="store_true",
+        help="Smooth registrations frame to frame"
     )
     parser.add_argument(
-        "-r", "--results_filename", help="Save registered bmode data to this file"
+        "-r",
+        "--results_filename",
+        help="Save registered bmode data to this file"
     )
-    parser.add_argument("-D", "--Debug", action="store_true", help="Enable debugging.")
+    parser.add_argument(
+       "-D",
+       "--Debug",
+       action="store_true",
+       help="Enable debugging."
+    )
     return parser
 
 
 def main(args):
     try:
-        app = mocoreg(register_to_frame_zero=args.zero, debug=args.Debug)
+        app = mocoreg(smooth_registrations=args.smooth, debug=args.Debug)
 
         app.read_4d_bmode_matlab_file(
             args.input_filename,
