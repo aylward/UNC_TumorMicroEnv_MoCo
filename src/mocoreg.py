@@ -16,18 +16,14 @@ class mocoreg:
         if smooth_registrations:
             self.register_to_prior_frame=True
             self.register_to_zero_frame=True
-            self.multi_frame_smoothing_window_size = 2
-            self.keyframe_transform_smoothing_window_size = 3
+            self.multi_frame_smoothing_window_size = 3
+            self.keyframe_transform_smoothing_window_size = 4
             self.frames_per_second = 200
             self.seconds_per_change = 0.333
             self.max_keyframe_interval = int(
                 self.frames_per_second * self.seconds_per_change / 2
             )
             self.keyframe_search_stepsize = max(2, int(self.max_keyframe_interval * 0.05))
-            self.registration_metric = "MEAN_SQUARED_ERROR_METRIC"
-            self.feature_size = 0.75
-            self.expected_offset = 2
-            self.expected_rotation = 0.02
         else:
             self.register_to_prior_frame=False
             self.register_to_zero_frame=True
@@ -37,11 +33,14 @@ class mocoreg:
             self.seconds_per_change = 1
             self.max_keyframe_interval = 1
             self.keyframe_search_stepsize = 1
-            #self.registration_metric = "MATTES_MI_METRIC"
-            self.registration_metric = "MEAN_SQUARED_ERROR_METRIC"
-            self.feature_size = 0.75
-            self.expected_offset = 2
-            self.expected_rotation = 0.02
+            
+        #self.registration_metric = "MATTES_MI_METRIC"
+        self.registration_metric = "MEAN_SQUARED_ERROR_METRIC"
+        self.feature_size = 0.75
+        self.expected_offset = 4
+        self.expected_rotation = 0.03
+        self.expected_scale = 0.05
+        self.expected_skew = 0.01
 
         print("smooth_registrations", self.smooth_registrations)
         print("feature_size", self.feature_size)
@@ -245,35 +244,50 @@ class mocoreg:
                             str(keyframes[i + 1]) + "_org_blur.mha")
 
             Reg = tube.RegisterImages[itk.Image[itk.F, 3]].New()
+            Reg.SetFixedImage(img_fixed_blur)
+            Reg.SetMovingImage(img_moving_blur)
+
             Reg.SetReportProgress(self.debug)
             Reg.SetMetric(self.registration_metric)
+            Reg.SetSampleFromOverlap(True)
+            
+            # ITK uses a different ordering of coordinates
+            img_shape = img_fixed_blur.shape
+            img_size = img_fixed_blur.GetLargestPossibleRegion().GetSize()
+            roi_p1 = [5,10,10]
+            roi_p2 = [img_shape[2]-20, img_shape[1]-10, img_shape[0]-10]
+            if self.debug:
+                print("Img Shape =", img_shape)
+                print("Img Size =", img_size)
+                print("Data Shape =", self.data_array.shape)
+                print("p1 =", roi_p1)
+                print("p2 =", roi_p2)
+            Reg.SetRegionOfInterestPoint1(roi_p1)
+            Reg.SetRegionOfInterestPoint2(roi_p2)
+            Reg.SetUseRegionOfInterest(True)
+            
             Reg.SetExpectedOffsetMagnitude(self.expected_offset)
             Reg.SetExpectedRotationMagnitude(self.expected_rotation)
+            Reg.SetExpectedScaleMagnitude(self.expected_scale)
+            Reg.SetExpectedSkewMagnitude(self.expected_skew)
+            
             Reg.SetRigidSamplingRatio(0.2)
-            Reg.SetRigidMaxIterations(2000)
-            Reg.SetExpectedScaleMagnitude(0.02)
-            Reg.SetExpectedSkewMagnitude(0.01)
+            Reg.SetRigidMaxIterations(500)
+            Reg.SetRigidTargetError(0.0000001)
+            
             Reg.SetAffineSamplingRatio(0.2)
             Reg.SetAffineMaxIterations(500)
             Reg.SetAffineTargetError(0.0000001)
 
-            Reg.SetFixedImage(img_fixed_blur)
-            Reg.SetMovingImage(img_moving_blur)
-
             Reg.SetRegistration("PIPELINE_AFFINE")
             
-            if i > 0 and not self.register_to_prior_frame and self.smooth_registrations:
+            if i > 0 and self.smooth_registrations and not (self.register_to_prior_frame and self.register_to_zero_frame):
                 Reg.SetLoadedMatrixTransform(self.keyframe_transforms[-1])
                 Reg.SetEnableLoadedRegistration(False)
                 Reg.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
             else:
                 Reg.SetInitialMethodEnum("INIT_WITH_NONE")
                 
-            Reg.SetEnableInitialRegistration(True)
-                
-            Reg.SetRigidMaxIterations(250)
-            Reg.SetAffineMaxIterations(250)
-
             Reg.Update()
 
             if np.isnan(Reg.GetCurrentMatrixTransform().GetParameters()[0]):
@@ -281,8 +295,6 @@ class mocoreg:
                 print("   Attempting re-registration")
                 Reg.SetInitialMethodEnum("INIT_WITH_NONE")
                 Reg.SetEnableInitialRegistration(True)
-                Reg.SetRigidMaxIterations(250)
-                Reg.SetAffineMaxIterations(250)
                 Reg.Update()
             if np.isnan(Reg.GetCurrentMatrixTransform().GetParameters()[0]):
                 print("ERROR: Registration failed twice!!")
@@ -291,8 +303,6 @@ class mocoreg:
                 Reg.SetRigidMaxIterations(0)
                 Reg.SetAffineMaxIterations(0)
                 Reg.Update()
-                Reg.SetRigidMaxIterations(250)
-                Reg.SetAffineMaxIterations(250)
 
             if self.register_to_prior_frame:
                 img_fixed_blur = Reg.GetFinalMovingImage()
@@ -302,26 +312,30 @@ class mocoreg:
                 trns.Compose(self.keyframe_transforms[-1], True)
                 
                 RegZero = tube.RegisterImages[itk.Image[itk.F, 3]].New()
+                RegZero.SetFixedImage(img_fixed_blur_0)
+                RegZero.SetMovingImage(img_moving_blur)
+            
                 RegZero.SetReportProgress(self.debug)
                 RegZero.SetMetric(self.registration_metric)
+                RegZero.SetSampleFromOverlap(True)
+                
                 RegZero.SetExpectedOffsetMagnitude(self.expected_offset)
                 RegZero.SetExpectedRotationMagnitude(self.expected_rotation)
-                RegZero.SetRigidSamplingRatio(0.2)
-                RegZero.SetRigidMaxIterations(2000)
-                RegZero.SetExpectedScaleMagnitude(0.02)
-                RegZero.SetExpectedSkewMagnitude(0.01)
+                RegZero.SetExpectedScaleMagnitude(self.expected_scale)
+                RegZero.SetExpectedSkewMagnitude(self.expected_skew)
+                
                 RegZero.SetAffineSamplingRatio(0.2)
                 RegZero.SetAffineMaxIterations(500)
                 RegZero.SetAffineTargetError(0.0000001)
     
-                RegZero.SetFixedImage(img_fixed_blur_0)
-                RegZero.SetMovingImage(img_moving_blur)
-            
+                RegZero.SetRegistration("AFFINE")
                 RegZero.SetLoadedMatrixTransform(trns)
                 RegZero.SetEnableLoadedRegistration(False)
                 RegZero.SetInitialMethodEnum("INIT_WITH_LOADED_TRANSFORM")
                 RegZero.SetEnableInitialRegistration(True)
+                
                 RegZero.Update()
+                
                 if np.isnan(RegZero.GetCurrentMatrixTransform().GetParameters()[0]):
                     print("ERROR: Registration failed!!")
                     print("   Attempting re-registration")
@@ -339,13 +353,18 @@ class mocoreg:
                     RegZero.Update()
                     RegZero.SetRigidMaxIterations(250)
                     RegZero.SetAffineMaxIterations(250)
+                    
                 self.keyframe_transforms.append(RegZero.GetCurrentMatrixTransform())
+                
                 if self.debug:
-                    itk.imwrite(Reg.GetFinalMovingImage(), str(keyframes[i + 1]) + "_reg_blur.mha")
+                    itk.imwrite(RegZero.GetFinalMovingImage(),
+                                str(keyframes[i + 1]) + "_reg_blur.mha")
             else:
                 self.keyframe_transforms.append(Reg.GetCurrentMatrixTransform())
+                
                 if self.debug:
-                    itk.imwrite(Reg.GetFinalMovingImage(), str(keyframes[i + 1]) + "_reg_blur.mha")
+                    itk.imwrite(Reg.GetFinalMovingImage(),
+                                str(keyframes[i + 1]) + "_reg_blur.mha")
 
         print("Done!")
 
